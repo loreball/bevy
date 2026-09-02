@@ -39,7 +39,7 @@ fn setup(mut commands: Commands) {
                     ..default()
                 },
                 TextCursorStyle::default(),
-                EditableTextFilter::new(|c| c.is_ascii_hexdigit()),
+                EditableTextFilter::new_for_char(|c| c.is_ascii_hexdigit()),
                 TextFont::from_font_size(32.),
                 BackgroundColor(DARK_SLATE_GRAY.into()),
                 BorderColor::all(SLATE_300),

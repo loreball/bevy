@@ -212,7 +212,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                                     BorderColor::all(SLATE_300),
                                     TextInput,
                                     EditableText::new("8"),
-                                    EditableTextFilter::new(|c| c.is_ascii_digit() || c == '.'),
+                                    EditableTextFilter::new_for_char(
+                                        |c| c.is_ascii_digit() || *c == '.'
+                                    ),
                                     TextCursorStyle {
                                         color: Color::WHITE,
                                         selected_text_color: Some(Color::BLACK),
@@ -297,7 +299,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                                     BorderColor::all(SLATE_300),
                                     TextInput,
                                     EditableText::new("30"),
-                                    EditableTextFilter::new(|c| c.is_ascii_digit()),
+                                    EditableTextFilter::new_for_char(|c| c.is_ascii_digit()),
                                     TextCursorStyle {
                                         color: Color::WHITE,
                                         selected_text_color: Some(Color::BLACK),
@@ -379,7 +381,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                                     BorderColor::all(SLATE_300),
                                     TextInput,
                                     EditableText::new("0"),
-                                    EditableTextFilter::new(|c| c.is_ascii_digit() || c == '.'),
+                                    EditableTextFilter::new_for_char(
+                                        |c| c.is_ascii_digit() || *c == '.'
+                                    ),
                                     TextCursorStyle {
                                         color: Color::WHITE,
                                         selected_text_color: Some(Color::BLACK),

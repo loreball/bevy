@@ -8,7 +8,7 @@ use smol_str::SmolStr;
 use swash::FontRef;
 
 use crate::scroll::{TextLineYBounds, TextViewport};
-use crate::TextBrush;
+use crate::{TextBrush, TextFilter};
 
 /// A selection within IME preedit text, expressed as byte offsets from the start of the preedit.
 ///
@@ -280,7 +280,7 @@ impl TextEdit {
         cursor_margin: Vec2,
         clipboard: &mut bevy_clipboard::Clipboard,
         max_characters: Option<usize>,
-        char_filter: impl Fn(char) -> bool,
+        char_filter: &impl TextFilter,
     ) {
         match self {
             TextEdit::Copy => {
@@ -460,7 +460,7 @@ impl TextEdit {
             }
             TextEdit::ImeCommit { value: text } => {
                 driver.clear_compose();
-                if text.chars().all(&char_filter)
+                if char_filter.matches(&text)
                     && max_characters.is_none_or(|max| {
                         driver.editor.text().chars().count() + text.chars().count() <= max
                     })
@@ -570,8 +570,8 @@ pub(crate) fn reveal_cursor(
 /// The two branches matter to callers (paste warns on [`CharFilter`](Self::CharFilter) but
 /// not on [`MaxLength`](Self::MaxLength)), so a bool return wouldn't suffice.
 enum InsertRejection {
-    /// At least one character failed the user-supplied filter.
-    CharFilter,
+    /// The provided text failed the user-supplied filter.
+    Filter,
     /// The insertion would exceed `max_characters`.
     MaxLength,
 }
@@ -584,10 +584,10 @@ fn insert_filtered(
     driver: &mut PlainEditorDriver<TextBrush>,
     text: &str,
     max_characters: Option<usize>,
-    char_filter: impl Fn(char) -> bool,
+    char_filter: &impl TextFilter,
 ) -> Result<(), InsertRejection> {
-    if !text.chars().all(char_filter) {
-        return Err(InsertRejection::CharFilter);
+    if !char_filter.matches(text) {
+        return Err(InsertRejection::Filter);
     }
     if let Some(max) = max_characters {
         let select_len = driver
@@ -614,13 +614,13 @@ pub(crate) fn poll_and_apply_paste(
     read: &mut ClipboardRead,
     driver: &mut PlainEditorDriver<TextBrush>,
     max_characters: Option<usize>,
-    char_filter: impl Fn(char) -> bool,
+    char_filter: &impl TextFilter,
 ) -> bool {
     match read.poll_result() {
         Some(Ok(text)) => {
             if matches!(
                 insert_filtered(driver, &text, max_characters, char_filter),
-                Err(InsertRejection::CharFilter)
+                Err(InsertRejection::Filter)
             ) {
                 bevy_log::debug!(
                     "Paste rejected: clipboard contents contained characters not allowed by the char filter."
@@ -638,6 +638,8 @@ pub(crate) fn poll_and_apply_paste(
 
 #[cfg(test)]
 mod tests {
+    use crate::AlwaysMatchesFilter;
+
     use super::*;
     use alloc::borrow::Cow;
     use parley::{FontContext, FontFamilyName, LayoutContext, PlainEditor};
@@ -670,7 +672,7 @@ mod tests {
             Vec2::ZERO,
             &mut bevy_clipboard::Clipboard::default(),
             None,
-            |_| true,
+            &AlwaysMatchesFilter,
         );
     }
 

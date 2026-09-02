@@ -77,7 +77,6 @@ use crate::{
     text_edit::{poll_and_apply_paste, reveal_cursor, TextEdit},
     FontCx, FontHinting, LayoutCx, LineHeight, TextBrush, TextColor, TextFont, TextLayout,
 };
-use alloc::sync::Arc;
 use bevy_clipboard::ClipboardRead;
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::prelude::*;
@@ -222,7 +221,7 @@ impl EditableText {
         font_context: &mut FontContext,
         layout_context: &mut LayoutContext<TextBrush>,
         clipboard: &mut bevy_clipboard::Clipboard,
-        char_filter: impl Fn(char) -> bool,
+        char_filter: &impl TextFilter,
     ) {
         let Self {
             editor,
@@ -241,7 +240,7 @@ impl EditableText {
         // so ordering relative to the paste is preserved.
         if let Some(mut read) = pending_paste.take() {
             let generation = driver.editor.generation();
-            if !poll_and_apply_paste(&mut read, &mut driver, *max_characters, &char_filter) {
+            if !poll_and_apply_paste(&mut read, &mut driver, *max_characters, char_filter) {
                 *pending_paste = Some(read);
                 return;
             }
@@ -259,8 +258,7 @@ impl EditableText {
                 TextEdit::Paste => {
                     let generation = driver.editor.generation();
                     let mut read = clipboard.fetch_text();
-                    if !poll_and_apply_paste(&mut read, &mut driver, *max_characters, &char_filter)
-                    {
+                    if !poll_and_apply_paste(&mut read, &mut driver, *max_characters, char_filter) {
                         *pending_paste = Some(read);
                         pending_edits.extend(edits);
                         return;
@@ -275,7 +273,7 @@ impl EditableText {
                     *cursor_margin,
                     clipboard,
                     *max_characters,
-                    &char_filter,
+                    char_filter,
                 ),
             }
         }
@@ -306,11 +304,11 @@ impl EditableText {
 #[derive(Component, PartialEq, Eq, Default, Clone, Copy, Deref, DerefMut)]
 pub struct EditableTextGeneration(parley::Generation);
 
-/// Sets a per-character filter for this text input. Insert and paste edits are ignored if the filter rejects any character.
+/// Sets a filter for this text input. Insert and paste edits are ignored if the filter rejects the input.
 ///
-/// The filter does not apply to characters already within the `EditableText`'s text buffer.
-#[derive(Component, Clone, Default)]
-pub struct EditableTextFilter(Option<Arc<dyn Fn(char) -> bool + Send + Sync + 'static>>);
+/// The filter does not apply to text already within the `EditableText`'s text buffer.
+#[derive(Component, Default)]
+pub struct EditableTextFilter(Option<Box<dyn TextFilter + Send + Sync + 'static>>);
 
 /// Indicates whether the text is editable, or is in "readonly" mode. A special "static" mode is
 /// also available, which is used by the feathers number input widget.
@@ -328,8 +326,38 @@ pub enum TextReadWriteMode {
 
 impl EditableTextFilter {
     /// Create a new `EditableTextFilter` from the given filter function.
-    pub fn new(filter: impl Fn(char) -> bool + Send + Sync + 'static) -> Self {
-        Self(Some(Arc::new(filter)))
+    ///
+    /// ```rust
+    /// # use bevy_text::{EditableTextFilter, TextFilter};
+    ///
+    /// // Usually, you'd pass in a closure that takes the newly pasted string.
+    ///
+    /// // This filter would only allow ascii characters as input.
+    /// let filter = EditableTextFilter::new(|s: &str| s.is_ascii());
+    ///
+    /// assert!(filter.matches("hello"));
+    /// assert!(!filter.matches("こんにちは"));
+    /// ```
+    pub fn new(filter: impl TextFilter + Send + Sync + 'static) -> Self {
+        Self(Some(Box::new(filter)))
+    }
+
+    /// Create a new `EditableTextFilter` from the given filter function.
+    ///
+    /// `filter` is applied to each character and all characters must match for
+    /// the text filter to match.
+    ///
+    /// ```rust
+    /// # use bevy_text::{EditableTextFilter, TextFilter};
+    ///
+    /// // Only allow ASCII uppercase characters into the `EditableText`.
+    /// let filter = EditableTextFilter::new_for_char(char::is_ascii_uppercase);
+    ///
+    /// assert!(filter.matches("HELLO"));
+    /// assert!(!filter.matches("HelLO"));
+    /// ```
+    pub fn new_for_char(filter: impl (Fn(&char) -> bool) + Send + Sync + 'static) -> Self {
+        Self(Some(Box::new(ForCharFilter(filter))))
     }
 }
 
@@ -350,15 +378,20 @@ pub fn apply_text_edits(
         // `pending_paste` can hold a cross-frame paste even when no new edits are queued,
         // so check for either before doing work.
         if !editable_text.pending_edits.is_empty() || editable_text.pending_paste.is_some() {
-            editable_text.apply_pending_edits(
-                &mut font_context,
-                &mut layout_context.0,
-                &mut clipboard,
-                match filter {
-                    Some(EditableTextFilter(Some(filter))) => filter.as_ref(),
-                    _ => &|_| true,
-                },
-            );
+            match filter.as_deref() {
+                Some(filter) => editable_text.apply_pending_edits(
+                    &mut font_context,
+                    &mut layout_context.0,
+                    &mut clipboard,
+                    filter,
+                ),
+                _ => editable_text.apply_pending_edits(
+                    &mut font_context,
+                    &mut layout_context.0,
+                    &mut clipboard,
+                    &AlwaysMatchesFilter,
+                ),
+            };
         }
 
         if **generation != editable_text.editor.generation() {
@@ -373,4 +406,65 @@ pub fn apply_text_edits(
 #[derive(EntityEvent)]
 pub struct TextEditChange {
     entity: Entity,
+}
+
+/// A filter used in a [`EditableTextFilter`].
+pub trait TextFilter {
+    /// Checks if the newly added string matches the filter.
+    fn matches(&self, insert: &str) -> bool;
+}
+
+// This could be a FnMut but then we would have to trigger change detection every
+// time the filter is used. Right now change detection triggers only when changing
+// the filter.
+impl<F: Fn(&str) -> bool> TextFilter for F {
+    fn matches(&self, insert: &str) -> bool {
+        self(insert)
+    }
+}
+
+/// A filter that matches a filter function over each character int the input string.
+struct ForCharFilter<F>(F);
+
+impl<F: Fn(&char) -> bool> TextFilter for ForCharFilter<F> {
+    fn matches(&self, insert: &str) -> bool {
+        println!("Testing: {insert}");
+        println!("Result: {}", insert.chars().all(|c| self.0(&c)));
+
+        insert.chars().all(|c| self.0(&c))
+    }
+}
+
+/// A helper filter that always matches.
+pub(crate) struct AlwaysMatchesFilter;
+
+impl TextFilter for AlwaysMatchesFilter {
+    fn matches(&self, _: &str) -> bool {
+        true
+    }
+}
+
+// We have to do this to make the code work since we can't coerce the inner
+// box into a `&dyn TextFilter`. We could also implement `TextFilter`
+// for `Box<dyn TextFilter>` but that would leak internal implementation details
+impl TextFilter for EditableTextFilter {
+    fn matches(&self, insert: &str) -> bool {
+        if let Some(filter) = &self.0 {
+            filter.matches(insert)
+        } else {
+            true
+        }
+    }
+}
+
+// Strictly speaking we only need this impl but it would feel weird for the text
+// filter to only be a filter when borrowed.
+impl<'a> TextFilter for &'a EditableTextFilter {
+    fn matches(&self, insert: &str) -> bool {
+        if let Some(filter) = &self.0 {
+            filter.matches(insert)
+        } else {
+            true
+        }
+    }
 }
