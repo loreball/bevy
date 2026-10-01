@@ -188,6 +188,15 @@ macro_rules! define_label {
             /// Returns an [`Interned`] value corresponding to `self`.
             fn intern(&self) -> $crate::intern::Interned<dyn $label_trait_name>
             where Self: ::core::marker::Sized {
+                if ::core::mem::size_of_val(self) == 0 {
+                    let align = ::core::mem::align_of_val(self);
+                    let ptr = ::core::ptr::without_provenance::<Self>(align);
+
+                    // SAFETY: Pointer points a ZST and is always non null since it's aligned so we can always read it.
+                    let static_ref = unsafe { ptr.as_ref_unchecked::<'static>() };
+                    return $crate::intern::Interned(static_ref);
+                }
+
                 static INTERNER: $crate::intern::Interner<dyn $label_trait_name> =
                     $crate::intern::Interner::new();
 

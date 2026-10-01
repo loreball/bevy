@@ -4,7 +4,7 @@
 //! speed up code by shrinking the stack size of large types,
 //! and make comparisons for any type as fast as integers.
 
-use alloc::{borrow::ToOwned, boxed::Box};
+use alloc::boxed::Box;
 use core::{fmt::Debug, hash::Hash, ops::Deref};
 
 use bevy_platform::{
@@ -114,7 +114,7 @@ pub trait Internable: Hash + Eq {
 
 impl Internable for str {
     fn leak(&self) -> &'static Self {
-        let str = self.to_owned().into_boxed_str();
+        let str = Box::from(self);
         Box::leak(str)
     }
 
